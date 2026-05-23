@@ -182,11 +182,18 @@ fun ShonenAppContent(
             // active panels selector
             when (viewModel.activeTab) {
                 ActiveTab.TRAINING -> {
+                    val primaryTask by viewModel.primaryTaskState.collectAsStateWithLifecycle()
+                    val secondaryTasks by viewModel.secondaryTasksState.collectAsStateWithLifecycle()
+
                     TrainingScreen(
                         subjects = subjects,
-                        dueChapters = dueChapters,
+                        primaryTask = primaryTask,
+                        secondaryTasks = secondaryTasks,
                         allChapters = chapters,
                         isTimerActive = viewModel.isTimerActive,
+                        isTimerPaused = viewModel.isTimerPaused,
+                        pauseCount = viewModel.pauseCount,
+                        isTimerFinishedAndAwaitingFeedback = viewModel.isTimerFinishedAndAwaitingFeedback,
                         timerSecondsRemaining = viewModel.timerSecondsRemaining,
                         timerTotalMinutes = viewModel.timerTotalDurationMinutes,
                         timerProgress = viewModel.timerProgress,
@@ -197,6 +204,15 @@ fun ShonenAppContent(
                         totalXp = viewModel.totalXpGained,
                         onStartTraining = { chapter, duration, focus ->
                             viewModel.startTraining(chapter, duration, focus)
+                        },
+                        onTogglePause = {
+                            viewModel.togglePauseTimer()
+                        },
+                        onDoneEarly = {
+                            viewModel.triggerDoneEarly()
+                        },
+                        onSubmitFeedback = { rating ->
+                            viewModel.submitFocusSessionFeedback(rating)
                         },
                         onPauseOrAbandon = {
                             viewModel.pauseOrAbandonTraining()

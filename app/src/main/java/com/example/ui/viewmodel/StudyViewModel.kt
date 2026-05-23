@@ -41,6 +41,10 @@ class StudyViewModel(application: Application) : AndroidViewModel(application) {
     val bossChaptersState: StateFlow<List<Chapter>>
     val dueChaptersState: StateFlow<List<Chapter>>
 
+    // --- SMART STUDY PLAN ENGINE ---
+    val primaryTaskState: StateFlow<Chapter?>
+    val secondaryTasksState: StateFlow<List<Chapter>>
+
     // --- ANALYTICS STATE (computed from sessions) ---
     var currentStreak by mutableStateOf(0)
         private set
@@ -51,6 +55,12 @@ class StudyViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- TIMER / ACTIVE TRAINING STATE ---
     var isTimerActive by mutableStateOf(false)
+        private set
+    var isTimerPaused by mutableStateOf(false)
+        private set
+    var pauseCount by mutableStateOf(0)
+        private set
+    var isTimerFinishedAndAwaitingFeedback by mutableStateOf(false)
         private set
     var timerSecondsRemaining by mutableStateOf(0)
         private set
@@ -94,6 +104,34 @@ class StudyViewModel(application: Application) : AndroidViewModel(application) {
 
         dueChaptersState = repository.getDueChapters(System.currentTimeMillis())
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+        primaryTaskState = combine(chaptersState, bossChaptersState, dueChaptersState) { chapters, bosses, due ->
+            if (bosses.isNotEmpty()) {
+                bosses.first()
+            } else if (due.isNotEmpty()) {
+                due.first()
+            } else {
+                val activeChapters = chapters.filter { it.status == "ACTIVE" }
+                if (activeChapters.isNotEmpty()) {
+                    activeChapters.minByOrNull { it.nextRevisionTime }
+                } else {
+                    chapters.firstOrNull()
+                }
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+        secondaryTasksState = combine(chaptersState, primaryTaskState) { chapters, primary ->
+            val remaining = if (primary != null) {
+                chapters.filter { it.id != primary.id }
+            } else {
+                chapters
+            }
+            remaining.sortedWith(
+                compareByDescending<Chapter> { it.isBoss }
+                    .thenBy { it.nextRevisionTime }
+                    .thenByDescending { it.getWeaknessCategory() == "WEAK" }
+            )
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
         // Compute streak and totals when sessions update
         viewModelScope.launch {
@@ -197,7 +235,14 @@ class StudyViewModel(application: Application) : AndroidViewModel(application) {
         timerSecondsRemaining = durationMinutes * 60
         isFocusMode = focus
         isTimerActive = true
+        isTimerPaused = false
+        pauseCount = 0
+        isTimerFinishedAndAwaitingFeedback = false
 
+        startTimerCountdown()
+    }
+
+    private fun startTimerCountdown() {
         timerJob?.cancel()
         timerJob = viewModelScope.launch {
             while (timerSecondsRemaining > 0) {
@@ -205,31 +250,37 @@ class StudyViewModel(application: Application) : AndroidViewModel(application) {
                 timerSecondsRemaining--
             }
             // SUCCESS! Full focus session completed!
-            completeActiveTraining(completedFully = true)
+            isTimerFinishedAndAwaitingFeedback = true
         }
     }
 
-    fun pauseOrAbandonTraining() {
+    fun togglePauseTimer() {
+        if (!isTimerActive || isTimerFinishedAndAwaitingFeedback) return
+        if (isTimerPaused) {
+            // Resume
+            isTimerPaused = false
+            startTimerCountdown()
+        } else {
+            // Pause (limited pause tracked in HUD stats)
+            isTimerPaused = true
+            timerJob?.cancel()
+            pauseCount++
+        }
+    }
+
+    fun triggerDoneEarly() {
         if (!isTimerActive) return
         timerJob?.cancel()
-        
-        // Calculate partially completed time
-        val elapsedSeconds = (timerTotalDurationMinutes * 60) - timerSecondsRemaining
-        val elapsedMinutes = elapsedSeconds / 60
-
-        if (elapsedMinutes >= 1) {
-            // Give them partial XP for showing up
-            completeActiveTraining(completedFully = false, durationMin = elapsedMinutes)
-        } else {
-            // Left without even 1 minute
-            resetTimer()
-        }
+        isTimerFinishedAndAwaitingFeedback = true
     }
 
-    private fun completeActiveTraining(completedFully: Boolean, durationMin: Int = timerTotalDurationMinutes) {
+    fun submitFocusSessionFeedback(rating: String) {
         val chapter = activeChapter ?: return
-        
-        // XP calculation: 1 XP per minute + 15 bonus XP if completed fully!
+        val elapsedSeconds = (timerTotalDurationMinutes * 60) - timerSecondsRemaining
+        val durationMin = maxOf(1, elapsedSeconds / 60)
+        val completedFully = !isTimerPaused && (timerSecondsRemaining <= 0)
+
+        // XP calculation: 1 XP per minute + 20 bonus XP if completed fully!
         val baseXp = durationMin
         val bonus = if (completedFully) 20 else 0
         val finalXp = baseXp + bonus
@@ -240,7 +291,8 @@ class StudyViewModel(application: Application) : AndroidViewModel(application) {
                 chapterId = chapter.id,
                 durationMinutes = durationMin,
                 xpGained = finalXp,
-                sessionType = if (chapter.isBoss) "BOSS_BATTLE" else "TRAINING"
+                sessionType = if (chapter.isBoss) "BOSS_BATTLE" else "TRAINING",
+                rating = rating
             )
 
             if (completedFully) {
@@ -255,6 +307,14 @@ class StudyViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun pauseOrAbandonTraining() {
+        if (!isTimerActive) return
+        timerJob?.cancel()
+        
+        // Abandoning directly resets the state
+        resetTimer()
+    }
+
     fun clearLevelUpEvent() {
         _levelUpEvent.value = null
     }
@@ -266,6 +326,9 @@ class StudyViewModel(application: Application) : AndroidViewModel(application) {
     private fun resetTimer() {
         timerJob?.cancel()
         isTimerActive = false
+        isTimerPaused = false
+        pauseCount = 0
+        isTimerFinishedAndAwaitingFeedback = false
         timerSecondsRemaining = 0
         activeChapter = null
         isFocusMode = false

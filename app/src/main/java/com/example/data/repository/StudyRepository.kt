@@ -47,7 +47,8 @@ class StudyRepository(private val studyDao: StudyDao) {
         chapterId: Long,
         durationMinutes: Int,
         xpGained: Int,
-        sessionType: String
+        sessionType: String,
+        rating: String = "MEDIUM"
     ): LevelUpResult {
         // 1. Log the study session
         val chapter = studyDao.getChapterById(chapterId) ?: return LevelUpResult(false, 1, 1)
@@ -85,16 +86,21 @@ class StudyRepository(private val studyDao: StudyDao) {
         studyDao.updateSubject(updatedSubject)
 
         // 3. For Spaced Repetion: completing a TRAINING/REVISION on this chapter advances its intervals
-        val currentStreak = chapter.consecutiveDoneCount + 1
-        val daysToAdd = getSpacedRepetitionDays(currentStreak)
+        val currentStreak = if (rating == "HARD") {
+            0
+        } else {
+            chapter.consecutiveDoneCount + 1
+        }
+        val daysToAdd = getAdaptiveSpacedRepetitionDays(currentStreak, rating)
         val nextDue = System.currentTimeMillis() + TimeUnit.DAYS.toMillis(daysToAdd.toLong())
 
         // If it was a boss, defeating it clears boss status!
         val updatedChapter = chapter.copy(
             consecutiveDoneCount = currentStreak,
             nextRevisionTime = nextDue,
-            missedCount = 0,
-            isBoss = false // Boss Defeated!
+            missedCount = if (rating == "HARD") chapter.missedCount + 1 else 0,
+            isBoss = false, // Boss Defeated!
+            lastRating = rating
         )
         studyDao.updateChapter(updatedChapter)
 
@@ -115,7 +121,8 @@ class StudyRepository(private val studyDao: StudyDao) {
             consecutiveDoneCount = 0, // Reset progression streak
             nextRevisionTime = nextDue,
             missedCount = newMissedCount,
-            isBoss = true // Marking as Boss Enemy!
+            isBoss = true, // Marking as Boss Enemy!
+            lastRating = "HARD"
         )
         studyDao.updateChapter(updatedChapter)
 
@@ -134,16 +141,30 @@ class StudyRepository(private val studyDao: StudyDao) {
     }
 
     /**
-     * Determines the interval in days based on consecutive successful reviews.
+     * Determines the interval in days based on consecutive successful reviews and latest performance rating.
      */
-    private fun getSpacedRepetitionDays(streak: Int): Int {
-        return when (streak) {
-            0 -> 1
-            1 -> 1  // 1 day
-            2 -> 3  // 3 days
-            3 -> 7  // 7 days
-            4 -> 14 // 14 days
-            else -> 30 // 30 days
+    private fun getAdaptiveSpacedRepetitionDays(streak: Int, rating: String): Int {
+        return when (rating) {
+            "EASY" -> {
+                when (streak) {
+                    0 -> 2
+                    1 -> 4
+                    2 -> 8
+                    3 -> 15
+                    else -> 45
+                }
+            }
+            "MEDIUM" -> {
+                when (streak) {
+                    0 -> 1
+                    1 -> 3
+                    2 -> 7
+                    3 -> 14
+                    else -> 30
+                }
+            }
+            "HARD" -> 1
+            else -> 1
         }
     }
 }

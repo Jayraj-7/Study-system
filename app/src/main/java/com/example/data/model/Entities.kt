@@ -28,8 +28,17 @@ data class Chapter(
     val nextRevisionTime: Long = System.currentTimeMillis(), // Spaced repetition due date (Timestamp)
     val isBoss: Boolean = false, // Underachieved / overdue / manually flagged weak chapter -> BOSS ENEMY!
     val missedCount: Int = 0, // Number of times skipped or overdue
-    val status: String = "ACTIVE" // ACTIVE, MASTERED
-)
+    val status: String = "ACTIVE", // ACTIVE, MASTERED
+    val lastRating: String = "MEDIUM" // EASY, MEDIUM, HARD
+) {
+    fun getWeaknessCategory(): String {
+        return when {
+            isBoss || lastRating == "HARD" || missedCount > 1 -> "WEAK"
+            consecutiveDoneCount >= 3 && lastRating == "EASY" && missedCount == 0 -> "STRONG"
+            else -> "MEDIUM"
+        }
+    }
+}
 
 @Entity(tableName = "study_sessions")
 data class StudySession(
