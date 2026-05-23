@@ -1,0 +1,6 @@
+{
+  "name": "Shonen Study System",
+  "description": "Improve exam performance using spaced repetition, active recall, and habit tracking in a game-like anime progression style.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
